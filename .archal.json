@@ -1,0 +1,8 @@
+{
+  "agent": {
+    "command": "node",
+    "args": [".archal/harness.mjs"]
+  },
+  "clones": ["github"],
+  "scenarios": ["scenarios/"]
+}
