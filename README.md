@@ -1,131 +1,138 @@
-# archal-agenteval
+# Archal-AgentEval
 
-Test your AI agent against Archal twins using AgentEval scenarios.
+Test your AI agents against Archal twins using AgentEval.
 
-Built in a weekend by [Fizza Mukhtar](https://github.com/Fizza-Mukhtar) —
-founder of [AgentEval](https://github.com/Fizza-Mukhtar/agentEval), an open-source
-behavioral testing framework for AI agents.
+Built by [Fizza Mukhtar](https://github.com/Fizza-Mukhtar) —
+founder of [AgentEval](https://github.com/Fizza-Mukhtar/agentEval).
 
-## The problem
+## What this is
 
-You want to test whether your agent correctly interacts with GitHub, Stripe, or Slack.
-But hitting real APIs during testing means real consequences — real issues created,
-real charges made, real messages sent.
+A real end-to-end integration between two complementary tools:
 
-Archal solves the environment problem: working clones of real services, same API surface, no real consequences.
-AgentEval solves the evaluation problem: did the agent call the right tools, in the right order, without looping?
+**AgentEval** — evaluates whether your agent called the right tools,
+in the right order, without looping, within the step limit.
 
-This integration wires them together.
+**Archal** — provides working clones of real services (GitHub, Stripe, Slack)
+so your agent can make real API calls without touching real production data.
 
-## How it works
+Together: your agent runs against a real GitHub clone, makes real API calls,
+and gets a structured pass/fail evaluation with exact failure points.
+
+## This is not a mock
+
+The agent in this repo is powered by Groq (Llama 3.3 70B). It makes real
+tool decisions, calls real GitHub API endpoints on the Archal twin, and
+gets evaluated by real AgentEval logic.
 
 ```
-AgentEval generates test scenarios
-    -> Archal twin starts (GitHub, Stripe, Slack...)
-    -> Twin seeded with known starting state
-    -> Task sent to your agent
-    -> Agent hits twin API (not real API)
-    -> AgentEval evaluates: right tools? right order? completed?
-    -> Pass/fail result with exact failure point
+Groq LLM decides which tool to call
+    -> create_issue / add_label / list_issues / assign_issue / close_issue
+    -> hits Archal GitHub twin (real API, not real GitHub)
+    -> AgentEval records trace and evaluates pass/fail
+    -> results appear in AgentEval dashboard
 ```
 
 ## Results
 
+70% pass rate on first run against a real GitHub issue management agent:
+
 ```
-AgentEval + Archal Results
+GitHub Issue Manager Agent
 ==================================================
-Twin      : github
-Session   : 14b76daf...
-Pass rate : 67% (2/3)
+Pass rate : 70% (7/10)
 ==================================================
-  [PASS] Happy path: create issue
-         Steps: 3
-  [PASS] Happy path: book a flight
-         Steps: 3
-  [FAIL] Failure case: missing info
-         Agent did not signal task completion
-         Steps: 1
+  [PASS] Create issue              2 steps  100% accuracy
+  [FAIL] Missing repo              3 steps  exceeded_steps (max: 2)
+  [FAIL] Issue with special chars  6 steps  exceeded_steps (max: 5)
+  [PASS] List and create           3 steps  100% accuracy
+  [PASS] Invalid label             3 steps  100% accuracy
+  [PASS] Issue with long title     3 steps  100% accuracy
+  [PASS] Missing title             2 steps  100% accuracy
+  [PASS] Create and list           3 steps  100% accuracy
+  [PASS] Invalid repo              3 steps  100% accuracy
+  [FAIL] Multiple labels           3 steps  wrong_tool
+```
+
+## Architecture
+
+```
+archal-agenteval/
+├── github_agent/
+│   ├── agent.py      <- Groq-powered GitHub issue manager
+│   └── server.py     <- FastAPI wrapper (AgentEval compatible)
+├── archal_agenteval/
+│   ├── __init__.py
+│   └── runner.py     <- Archal twin client
+├── scenarios/        <- markdown scenario files
+└── demo.py
 ```
 
 ## Setup
 
 ```bash
-# Install dependencies
-pip install httpx
+# 1. Clone
+git clone https://github.com/Fizza-Mukhtar/archal-agenteval
+cd archal-agenteval
+
+# 2. Install
+pip install httpx groq fastapi uvicorn
+
+# 3. Start Archal twin
 npm install -g archal
 archal login
-
-# Start a twin
 archal twin start github
 
-# Set environment variables
+# 4. Set environment variables
 export ARCHAL_TOKEN=archal_xxx
 export ARCHAL_SESSION_ID=<session-id-from-above>
-export AGENT_ENDPOINT=http://localhost:9001/run
+export GROQ_API_KEY=gsk_xxx
+
+# 5. Start AgentEval backend (separate terminal)
+# git clone https://github.com/Fizza-Mukhtar/agentEval
+# docker compose up -d db redis
+# uvicorn backend.app.main:app --reload --port 8000
+# cd backend && python -m app.worker
+
+# 6. Start the GitHub agent
+python -m github_agent.server
+
+# 7. Submit a test run to AgentEval
+curl -X POST http://localhost:8000/api/v1/runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "GitHub Issue Manager Agent",
+    "agent_endpoint": "http://localhost:9000/run",
+    "task_description": "Create and manage GitHub issues in testuser/test-repo",
+    "expected_tools": ["create_issue", "add_label", "list_issues"],
+    "max_steps": 10
+  }'
+
+# 8. Open AgentEval dashboard
+# http://localhost:3000
 ```
 
-## Run
+## GitHub Agent tools
 
-```bash
-python demo.py
-```
+The agent can call 5 tools against the Archal GitHub twin:
 
-## Use in your own project
-
-```python
-from archal_agenteval import ArchalAgentEvalRunner
-
-runner = ArchalAgentEvalRunner(
-    archal_token="archal_xxx",
-    session_id="your-session-id",
-    agent_endpoint="http://localhost:9000/run",
-    twin="github",
-)
-
-results = await runner.run(
-    scenarios=[
-        {
-            "title": "Create issue",
-            "task": "Create a GitHub issue titled 'bug: login fails' in testuser/test-repo",
-        },
-    ],
-    expected_tools=["create_issue"],
-    max_steps=5,
-)
-
-print(results.summary())
-```
-
-## Folder structure
-
-```
-archal-agenteval/
-├── archal_agenteval/
-│   ├── __init__.py
-│   └── runner.py        <- core integration
-├── .archal/
-│   └── harness.mjs      <- Archal CLI harness
-├── scenarios/           <- markdown scenario files
-├── demo.py              <- end-to-end demo
-└── README.md
-```
-
-## Supported twins
-
-github, stripe, slack, linear, supabase, discord, google-workspace
+| Tool | What it does |
+|---|---|
+| `list_issues` | List open/closed issues in a repo |
+| `create_issue` | Create a new issue with title and body |
+| `add_label` | Add a label to an existing issue |
+| `assign_issue` | Assign an issue to a user |
+| `close_issue` | Close an issue with an optional comment |
 
 ## Why this matters
 
-Most agent testing hits real APIs — which means:
-- Real side effects during testing
-- Can't reset state between scenarios
-- Can't run the same test twice safely
+Without Archal: testing an agent against GitHub means real issues get created,
+real notifications go out, real data gets modified.
 
-Archal + AgentEval gives you:
-- Clean state before every scenario
-- Full execution trace
-- Exact failure point when something breaks
-- Safe to run in CI
+Without AgentEval: you have no structured way to know if the agent called
+the right tool, in the right order, or if it got stuck in a loop.
+
+With both: clean state before every scenario, full execution trace,
+exact failure point when something breaks, safe to run in CI.
 
 ---
 
